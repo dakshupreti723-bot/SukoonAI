@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "sukoonai-production.up.railway.app/api/$1"
+    }
+  ]
+}
