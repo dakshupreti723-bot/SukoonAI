@@ -1,5 +1,6 @@
 import { FinalReportResult } from "../types";
 import { handleResponse } from "./api";
+import { API_BASE } from "./api";
 
 export interface FinalSubmission {
   phq9Responses: number[];
@@ -19,7 +20,7 @@ export const submitFinalConsolidation = async (
 
   // Do NOT manually set Content-Type here — the browser needs to
   // generate the multipart boundary itself.
-  const response = await fetch("/api/final", {
+  const response = await fetch(`${API_BASE}/api/final`, {
     method: "POST",
     body: formData,
   });
