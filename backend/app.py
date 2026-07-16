@@ -85,7 +85,7 @@ app = FastAPI(
 # allow_origins is "*" (browsers reject the wildcard-with-credentials combo).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://sukoon-ai-eight.vercel.app"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
