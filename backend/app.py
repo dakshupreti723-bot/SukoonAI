@@ -83,9 +83,12 @@ app = FastAPI(
 # CORS. The frontend is normally served same-origin via the Vite dev proxy,
 # so credentials are not required. allow_credentials must be False when
 # allow_origins is "*" (browsers reject the wildcard-with-credentials combo).
+import re
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://sukoon-ai-eight.vercel.app"],
+    allow_origin_regex=r"https://sukoon-.*-daksh-upretis-projects\.vercel\.app",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
