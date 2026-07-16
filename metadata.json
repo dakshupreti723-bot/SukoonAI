@@ -1,0 +1,6 @@
+{
+  "name": "SukoonAI",
+  "description": "An AI-powered mental wellness companion combining clinically-inspired questionnaires, AI conversation analysis, and voice sentiment insights to encourage early self-reflection.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
