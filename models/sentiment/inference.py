@@ -3,6 +3,7 @@ import argparse
 import json
 import logging
 import re
+from urllib import response
 import requests
 
 logger = logging.getLogger(__name__)
@@ -31,11 +32,13 @@ def _predict_transformer(text: str) -> dict:
     cleaned = clean_text_transformer(text)
 
     response = requests.post(
-        HF_API_URL,
-        headers={"Authorization": f"Bearer {HF_TOKEN}"},
-        json={"inputs": cleaned},
-        timeout=30,
+    HF_API_URL,
+    headers={"Authorization": f"Bearer {HF_TOKEN}"},
+    json={"inputs": cleaned},
+    timeout=30,
     )
+    if response.status_code != 200:
+        logger.error("HF API error %s: %s", response.status_code, response.text)
     response.raise_for_status()
     raw = response.json()
 
