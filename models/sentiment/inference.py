@@ -15,7 +15,7 @@ LABEL_FILE = os.path.join(BASE_DIR, "label_encoder_classes.json")
 CONFIDENCE_THRESHOLD = 0.50  # Risk mitigater for downstream alert fusion
 
 HF_MODEL_ID = "dakshupreti723/sukoon-sentiment"
-HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}"
+HF_API_URL = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL_ID}"
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 
