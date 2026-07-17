@@ -3,35 +3,20 @@ import argparse
 import json
 import logging
 import re
-import torch
-
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import requests
 
 logger = logging.getLogger(__name__)
 
 # ==========================================================
 # Configuration
 # ==========================================================
-MODEL_TYPE = "transformer"
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-BASELINE_MODEL_PATH = os.path.join(BASE_DIR, "baseline_model.joblib")
-TRANSFORMER_MODEL_DIR = "dakshupreti723/sukoon-sentiment"
 LABEL_FILE = os.path.join(BASE_DIR, "label_encoder_classes.json")
-MAX_LENGTH = 128
-CONFIDENCE_THRESHOLD = 0.50 # Risk mitigater for downstream alert fusion
+CONFIDENCE_THRESHOLD = 0.50  # Risk mitigater for downstream alert fusion
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-logger.info("Sentiment model device: %s", DEVICE)
-
-
-def clean_text_baseline(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r"http\S+|www\S+", " ", text)
-    text = re.sub(r"[^a-z\s']", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+HF_MODEL_ID = "dakshupreti723/sukoon-sentiment"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}"
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 
 def clean_text_transformer(text: str) -> str:
@@ -42,90 +27,36 @@ def clean_text_transformer(text: str) -> str:
     return text.strip()
 
 
-# ==========================================================
-# Model Singletons
-# ==========================================================
-_baseline_model = None
-_transformer_model = None
-_transformer_tokenizer = None
-_transformer_labels = None
-
-
-def _load_baseline():
-    global _baseline_model
-    if _baseline_model is None:
-        import joblib
-        _baseline_model = joblib.load(BASELINE_MODEL_PATH)
-    return _baseline_model
-
-
-def _predict_baseline(text: str) -> dict:
-    model = _load_baseline()
-    cleaned = clean_text_baseline(text)
-    probabilities = model.predict_proba([cleaned])[0]
-    classes = model.classes_
-
-    results = {label: float(prob) for label, prob in zip(classes, probabilities)}
-    results = dict(sorted(results.items(), key=lambda x: x[1], reverse=True))
-    
-    prediction = max(results, key=results.get)
-    confidence = results[prediction]
-    
-    # Apply Threshold Guard
-    if confidence < CONFIDENCE_THRESHOLD:
-        prediction = f"Uncertain (Low Confidence: {prediction})"
-
-    return {
-        "prediction": prediction,
-        "confidence": confidence,
-        "probabilities": results
-    }
-
-
-def _load_transformer():
-    global _transformer_model, _transformer_tokenizer, _transformer_labels
-    if _transformer_model is None:
-        logger.info("Loading sentiment transformer model ...")
-        _transformer_tokenizer = AutoTokenizer.from_pretrained(TRANSFORMER_MODEL_DIR)
-        _transformer_model = AutoModelForSequenceClassification.from_pretrained(TRANSFORMER_MODEL_DIR)
-        _transformer_model.to(DEVICE)
-        _transformer_model.eval()
-
-        with open(LABEL_FILE, "r", encoding="utf-8") as f:
-            _transformer_labels = json.load(f)
-        logger.info("Sentiment transformer loaded.")
-    return _transformer_model, _transformer_tokenizer, _transformer_labels
-    
-
 def _predict_transformer(text: str) -> dict:
-    model, tokenizer, labels = _load_transformer()
     cleaned = clean_text_transformer(text)
 
-    inputs = tokenizer(cleaned, return_tensors="pt", truncation=True, max_length=MAX_LENGTH)
-    inputs = {key: value.to(DEVICE) for key, value in inputs.items()}
+    response = requests.post(
+        HF_API_URL,
+        headers={"Authorization": f"Bearer {HF_TOKEN}"},
+        json={"inputs": cleaned},
+        timeout=30,
+    )
+    response.raise_for_status()
+    raw = response.json()
 
-    with torch.no_grad():
-        outputs = model(**inputs)
-        probabilities = torch.softmax(outputs.logits, dim=-1).squeeze()
+    # HF Inference API returns: [[{"label": "...", "score": ...}, ...]]
+    if isinstance(raw, dict) and "error" in raw:
+        raise RuntimeError(f"HF Inference API error: {raw['error']}")
 
-    if probabilities.ndim == 0:
-        probabilities = probabilities.unsqueeze(0)
-        
-    probabilities = probabilities.cpu().numpy()
-    results = {label: float(prob) for label, prob in zip(labels, probabilities)}
+    predictions = raw[0] if isinstance(raw[0], list) else raw
+    results = {p["label"]: float(p["score"]) for p in predictions}
     results = dict(sorted(results.items(), key=lambda x: x[1], reverse=True))
 
     prediction = next(iter(results))
     confidence = results[prediction]
-    
-    # FIXED: Threshold check ensures weak model states won't trigger critical system warnings
+
     if confidence < CONFIDENCE_THRESHOLD:
         prediction = f"Uncertain (Low Confidence: {prediction})"
 
     return {
         "prediction": prediction,
         "confidence": confidence,
-        "probabilities": results
+        "probabilities": results,
     }
 
 
@@ -139,14 +70,7 @@ def predict_sentiment(text: str) -> dict:
         return {"prediction": None, "confidence": 0.0, "probabilities": {}}
 
     try:
-        if MODEL_TYPE.lower() == "baseline":
-            return _predict_baseline(text)
-        elif MODEL_TYPE.lower() == "transformer":
-            return _predict_transformer(text)
-        else:
-            raise ValueError(f"Unknown MODEL_TYPE: {MODEL_TYPE}")
-    except FileNotFoundError as e:
-        raise FileNotFoundError("Model files not found. Please train the model first.") from e
+        return _predict_transformer(text)
     except Exception as e:
         raise RuntimeError(f"Inference failed: {e}") from e
 
