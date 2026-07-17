@@ -1,23 +1,24 @@
 import os
-import argparse
 import json
 import logging
 import re
-from urllib import response
-import requests
+import torch
+
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 logger = logging.getLogger(__name__)
 
-# ==========================================================
-# Configuration
-# ==========================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TRANSFORMER_MODEL_DIR = "dakshupreti723/sukoon-sentiment"
 LABEL_FILE = os.path.join(BASE_DIR, "label_encoder_classes.json")
-CONFIDENCE_THRESHOLD = 0.50  # Risk mitigater for downstream alert fusion
+MAX_LENGTH = 128
+CONFIDENCE_THRESHOLD = 0.50
 
-HF_MODEL_ID = "dakshupreti723/sukoon-sentiment"
-HF_API_URL = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL_ID}"
-HF_TOKEN = os.getenv("HF_TOKEN")
+DEVICE = torch.device("cpu")  # Railway has no GPU; force CPU explicitly
+
+_transformer_model = None
+_transformer_tokenizer = None
+_transformer_labels = None
 
 
 def clean_text_transformer(text: str) -> str:
@@ -28,26 +29,41 @@ def clean_text_transformer(text: str) -> str:
     return text.strip()
 
 
+def _load_transformer():
+    global _transformer_model, _transformer_tokenizer, _transformer_labels
+    if _transformer_model is None:
+        logger.info("Loading sentiment transformer model ...")
+        _transformer_tokenizer = AutoTokenizer.from_pretrained(TRANSFORMER_MODEL_DIR)
+        _transformer_model = AutoModelForSequenceClassification.from_pretrained(
+            TRANSFORMER_MODEL_DIR,
+            torch_dtype=torch.bfloat16,   # bfloat16 has real CPU kernel support, unlike float16
+            low_cpu_mem_usage=True,
+        )
+        _transformer_model.to(DEVICE)
+        _transformer_model.eval()
+
+        with open(LABEL_FILE, "r", encoding="utf-8") as f:
+            _transformer_labels = json.load(f)
+        logger.info("Sentiment transformer loaded.")
+    return _transformer_model, _transformer_tokenizer, _transformer_labels
+
+
 def _predict_transformer(text: str) -> dict:
+    model, tokenizer, labels = _load_transformer()
     cleaned = clean_text_transformer(text)
 
-    response = requests.post(
-    HF_API_URL,
-    headers={"Authorization": f"Bearer {HF_TOKEN}"},
-    json={"inputs": cleaned},
-    timeout=30,
-    )
-    if response.status_code != 200:
-        logger.error("HF API error %s: %s", response.status_code, response.text)
-    response.raise_for_status()
-    raw = response.json()
+    inputs = tokenizer(cleaned, return_tensors="pt", truncation=True, max_length=MAX_LENGTH)
+    inputs = {key: value.to(DEVICE) for key, value in inputs.items()}
 
-    # HF Inference API returns: [[{"label": "...", "score": ...}, ...]]
-    if isinstance(raw, dict) and "error" in raw:
-        raise RuntimeError(f"HF Inference API error: {raw['error']}")
+    with torch.no_grad():
+        outputs = model(**inputs)
+        probabilities = torch.softmax(outputs.logits.float(), dim=-1).squeeze()
 
-    predictions = raw[0] if isinstance(raw[0], list) else raw
-    results = {p["label"]: float(p["score"]) for p in predictions}
+    if probabilities.ndim == 0:
+        probabilities = probabilities.unsqueeze(0)
+
+    probabilities = probabilities.cpu().numpy()
+    results = {label: float(prob) for label, prob in zip(labels, probabilities)}
     results = dict(sorted(results.items(), key=lambda x: x[1], reverse=True))
 
     prediction = next(iter(results))
@@ -63,9 +79,6 @@ def _predict_transformer(text: str) -> dict:
     }
 
 
-# ==========================================================
-# Public API
-# ==========================================================
 def predict_sentiment(text: str) -> dict:
     if not isinstance(text, str):
         raise TypeError("Input must be a string.")
@@ -76,20 +89,3 @@ def predict_sentiment(text: str) -> dict:
         return _predict_transformer(text)
     except Exception as e:
         raise RuntimeError(f"Inference failed: {e}") from e
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Mental Health Sentiment Inference")
-    parser.add_argument("--text", required=True, help="Input sentence")
-    args = parser.parse_args()
-
-    result = predict_sentiment(args.text)
-    print("\nPrediction")
-    print("-" * 40)
-    print(f"Predicted Class : {result['prediction']}")
-    print(f"Confidence      : {result['confidence']:.4f}")
-
-    print("\nClass Probabilities")
-    print("-" * 40)
-    for label, probability in result["probabilities"].items():
-        print(f"{label:<20} {probability:.4f}")
